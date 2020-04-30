@@ -4,12 +4,16 @@
 # LICENSE file in the root directory of this source tree.
 
 import math
+import sys
+import numpy as np
 
 import torch
 import torch.nn.functional as F
 
 from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
+
+from sklearn.metrics import confusion_matrix
 
 
 @register_criterion('sentence_prediction')
@@ -66,8 +70,11 @@ class SentencePredictionCriterion(FairseqCriterion):
         if not self.regression_target:
             preds = logits.argmax(dim=1)
             logging_output['ncorrect'] = (preds == targets).sum()
-
+            logging_output['confusion_matrix'] = confusion_matrix(y_true = targets.cpu(), y_pred = preds.cpu(), labels = list(range(model.args.num_classes)))
         return loss, sample_size, logging_output
+
+
+
 
     @staticmethod
     def reduce_metrics(logging_outputs) -> None:
@@ -84,6 +91,20 @@ class SentencePredictionCriterion(FairseqCriterion):
         if len(logging_outputs) > 0 and 'ncorrect' in logging_outputs[0]:
             ncorrect = sum(log.get('ncorrect', 0) for log in logging_outputs)
             metrics.log_scalar('accuracy', 100.0 * ncorrect / nsentences, nsentences, round=1)
+
+        def f1score(cm):
+            true_pos = np.diag(cm)
+            false_pos = np.sum(cm, axis=0) - true_pos
+            false_neg = np.sum(cm, axis=1) - true_pos
+
+            precision = (true_pos / (true_pos + false_pos + 1e-20))
+            recall = (true_pos / (true_pos + false_neg + 1e-20))
+
+            return (2 * precision * recall) / (precision + recall + 1e-20)
+            
+        if len(logging_outputs) > 0 and 'confusion_matrix' in logging_outputs[0]:
+            confusion_matrix = sum(log.get('confusion_matrix', 0) for log in logging_outputs)
+            metrics.log_scalar('f1score', np.mean(f1score(confusion_matrix)), nsentences, round=3) #not sure if weight should be 0 or nsentences
 
     @staticmethod
     def logging_outputs_can_be_summed() -> bool:

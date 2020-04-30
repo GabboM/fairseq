@@ -27,7 +27,7 @@ from fairseq.modules.transformer_sentence_encoder import init_bert_params
 
 from .hub_interface import RobertaHubInterface
 
-from .model import RobertaModel
+from .model import *
 
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,38 @@ class AlbertModel(RobertaModel):
         encoder = AlbertEncoder(args, task.source_dictionary)
         return cls(args, encoder)
 
+class AlbertLMHead(nn.Module):
+    """Head for masked language modeling."""
+
+    def __init__(self, embed_dim, factorization_dim, output_dim, activation_fn, weight=None):
+        super().__init__()
+        self.dense = nn.Linear(embed_dim, embed_dim)
+        self.activation_fn = utils.get_activation_fn(activation_fn)
+        self.layer_norm = LayerNorm(embed_dim)
+
+        self.factorization = nn.Linear(embed_dim,factorization_dim)
+        
+        if weight is None:
+            weight = nn.Linear(factorization_dim, output_dim, bias=False).weight
+        self.defactorization_weight = weight
+        self.bias = nn.Parameter(torch.zeros(output_dim))
+        
+
+    def forward(self, features, masked_tokens=None, **kwargs):
+        # Only project the unmasked tokens while training,
+        # saves both memory and computation
+        if masked_tokens is not None:
+            features = features[masked_tokens, :]
+
+        x = self.dense(features)
+        x = self.activation_fn(x)
+        x = self.layer_norm(x)
+
+        x = self.factorization(x)
+        # project back to size of vocabulary with bias
+        x = F.linear(x, self.defactorization_weight) + self.bias
+        return x
+
 
 
 class AlbertEncoder(FairseqDecoder):
@@ -128,8 +160,9 @@ class AlbertEncoder(FairseqDecoder):
             apply_bert_init=True,
             activation_fn=args.activation_fn,
         )
-        self.lm_head = RobertaLMHead(
+        self.lm_head = AlbertLMHead(
             embed_dim=args.encoder_embed_dim,
+            factorization_dim=args.factorization_dim,
             output_dim=len(dictionary),
             activation_fn=args.activation_fn,
             weight=self.sentence_encoder.embed_tokens.weight,

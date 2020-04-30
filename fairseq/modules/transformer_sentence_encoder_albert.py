@@ -45,7 +45,7 @@ def init_bert_params(module):
         module.v_proj.weight.data.normal_(mean=0.0, std=0.02)
 
 
-class TransformerSentenceEncoder(nn.Module):
+class TransformerSentenceEncoderAlbert(nn.Module):
     """
     Implementation for a Bi-directional Transformer based Sentence Encoder used
     in BERT/XLM style pre-trained models.
@@ -73,7 +73,7 @@ class TransformerSentenceEncoder(nn.Module):
         self,
         padding_idx: int,
         vocab_size: int,
-        num_encoder_layers: int = 6,
+        num_encoder_layers: int = 12,
         factorization_dim: int = 128,
         embedding_dim: int = 768,
         ffn_embedding_dim: int = 3072,
@@ -106,6 +106,7 @@ class TransformerSentenceEncoder(nn.Module):
         self.max_seq_len = max_seq_len
         self.factorization_dim = factorization_dim
         self.embedding_dim = embedding_dim
+        self.num_encoder_layers = num_encoder_layers
         self.num_segments = num_segments
         self.cross_layer_parameter_sharing = cross_layer_parameter_sharing
         self.use_position_embeddings = use_position_embeddings
@@ -114,12 +115,12 @@ class TransformerSentenceEncoder(nn.Module):
         self.traceable = traceable
 
         self.embed_tokens = nn.Embedding(
-            self.vocab_size, self.embedding_dim, self.padding_idx
+            self.vocab_size, self.factorization_dim, self.padding_idx
         )
         self.embed_scale = embed_scale
 
         self.segment_embeddings = (
-            nn.Embedding(self.num_segments, self.embedding_dim, padding_idx=None)
+            nn.Embedding(self.num_segments, self.factorization_dim, padding_idx=None)
             if self.num_segments > 0
             else None
         )
@@ -127,7 +128,7 @@ class TransformerSentenceEncoder(nn.Module):
         self.embed_positions = (
             PositionalEmbedding(
                 self.max_seq_len,
-                self.embedding_dim,
+                self.factorization_dim,
                 padding_idx=(self.padding_idx if offset_positions_by_padding else None),
                 learned=self.learned_pos_embedding,
             )
@@ -135,10 +136,10 @@ class TransformerSentenceEncoder(nn.Module):
             else None
         )
 
+        self.factorization = nn.Linear(self.factorization_dim, self.embedding_dim)
+
         if self.cross_layer_parameter_sharing:
-            self.layers = nn.ModuleList(
-                [
-                    TransformerSentenceEncoderLayer(
+            self.layers = TransformerSentenceEncoderLayer(
                         embedding_dim=self.embedding_dim,
                         ffn_embedding_dim=ffn_embedding_dim,
                         num_attention_heads=num_attention_heads,
@@ -148,9 +149,6 @@ class TransformerSentenceEncoder(nn.Module):
                         activation_fn=activation_fn,
                         export=export,
                     )
-                    for _ in range(1)
-                ]
-            )
         else:
             self.layers = nn.ModuleList(
                 [
@@ -164,7 +162,7 @@ class TransformerSentenceEncoder(nn.Module):
                         activation_fn=activation_fn,
                         export=export,
                     )
-                    for _ in range(num_encoder_layers)
+                    for _ in range(self.num_encoder_layers)
                 ]
             )
 
@@ -216,8 +214,12 @@ class TransformerSentenceEncoder(nn.Module):
         if self.segment_embeddings is not None and segment_labels is not None:
             x += self.segment_embeddings(segment_labels)
 
+        x = self.factorization(x)
+
         if self.emb_layer_norm is not None:
             x = self.emb_layer_norm(x)
+
+        
 
         x = F.dropout(x, p=self.dropout, training=self.training)
 
@@ -232,13 +234,21 @@ class TransformerSentenceEncoder(nn.Module):
         if not last_state_only:
             inner_states.append(x)
 
-        for layer in self.layers:
-            # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
+        if not self.cross_layer_parameter_sharing:
+            for layer in self.layers:
+                # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
+                dropout_probability = random.uniform(0, 1)
+                if not self.training or (dropout_probability > self.layerdrop):
+                    x, _ = layer(x, self_attn_padding_mask=padding_mask)
+                    if not last_state_only:
+                        inner_states.append(x)
+        else:
             dropout_probability = random.uniform(0, 1)
-            if not self.training or (dropout_probability > self.layerdrop):
-                x, _ = layer(x, self_attn_padding_mask=padding_mask)
-                if not last_state_only:
-                    inner_states.append(x)
+            for _ in range(self.num_encoder_layers):
+                if not self.training or (dropout_probability > self.layerdrop):
+                    x, _ = self.layers(x, self_attn_padding_mask=padding_mask)
+                    if not last_state_only:
+                        inner_states.append(x)
 
         sentence_rep = x[0, :, :]
 
