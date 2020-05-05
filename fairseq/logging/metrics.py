@@ -130,6 +130,8 @@ def log_scalar(
         if key not in agg:
             agg.add_meter(key, AverageMeter(round=round), priority)
         agg[key].update(value, weight)
+        # if key == 'f1score':
+        #     print(agg[key].state_dict())
 
 
 def log_derived(key: str, fn: Callable[[MetersDict], float], priority: int = 20):

@@ -70,7 +70,7 @@ class SentencePredictionCriterion(FairseqCriterion):
         if not self.regression_target:
             preds = logits.argmax(dim=1)
             logging_output['ncorrect'] = (preds == targets).sum()
-            logging_output['confusion_matrix'] = confusion_matrix(y_true = targets.cpu(), y_pred = preds.cpu(), labels = list(range(model.args.num_classes)))
+            # logging_output['confusion_matrix'] = confusion_matrix(y_true = targets.cpu(), y_pred = preds.cpu(), labels = list(range(model.args.num_classes)))
         return loss, sample_size, logging_output
 
 
@@ -102,10 +102,12 @@ class SentencePredictionCriterion(FairseqCriterion):
 
             return (2 * precision * recall) / (precision + recall + 1e-20)
             
-        if len(logging_outputs) > 0 and 'confusion_matrix' in logging_outputs[0]:
-            confusion_matrix = sum(log.get('confusion_matrix', 0) for log in logging_outputs)
-            metrics.log_scalar('f1score', np.mean(f1score(confusion_matrix)), nsentences, round=3) #not sure if weight should be 0 or nsentences
-
+        # if len(logging_outputs) > 0 and 'confusion_matrix' in logging_outputs[0]:
+        #     confusion_matrix = sum(log.get('confusion_matrix', 0) for log in logging_outputs)
+        #     print(confusion_matrix)
+            
+        #     metrics.log_scalar('f1score', np.mean(f1score(confusion_matrix)), nsentences, round=3) #not sure if weight should be 0 or nsentences
+            
     @staticmethod
     def logging_outputs_can_be_summed() -> bool:
         """
